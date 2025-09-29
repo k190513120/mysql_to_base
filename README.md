@@ -1,202 +1,186 @@
 # MySQL到飞书多维表格同步工具
 
-这是一个Python脚本，用于将MySQL数据库表数据同步到飞书多维表格。支持自动创建表格、数据类型映射、增量同步等功能。
+这是一个用于将MySQL数据库同步到飞书多维表格的工具，支持通过GitHub Actions和HTTP请求触发同步任务。
 
 ## 功能特性
 
-- ✅ **自动表格创建**：为每张MySQL表在飞书多维表格中创建对应的新表
-- ✅ **智能数据类型映射**：自动将MySQL数据类型转换为飞书多维表格支持的字段类型
-- ✅ **增量同步**：支持记录的创建和更新，避免重复数据
-- ✅ **批量操作**：高效的批量数据处理，支持大数据量同步
-- ✅ **错误处理**：完善的异常处理和重试机制
-- ✅ **日志记录**：详细的同步过程日志，便于问题排查
-- ✅ **进度显示**：实时显示同步进度和结果统计
+- 🔄 自动同步MySQL数据库到飞书多维表格
+- 🚀 支持GitHub Actions自动化部署
+- 🌐 支持HTTP API触发同步
+- 📊 自动创建飞书表格和字段
+- 🔒 支持数据去重和增量同步
+- 📝 详细的同步日志记录
 
-## 环境要求
+## 快速开始
 
-- Python 3.7+
-- MySQL数据库访问权限
-- 飞书多维表格访问权限
+### 方法1: 通过GitHub Actions触发同步
 
-## 安装依赖
+#### 1. Repository Dispatch (推荐)
 
-### 1. 安装基础依赖
+发送POST请求到GitHub API来触发同步：
+
 ```bash
-pip install PyMySQL>=1.0.2
-pip install python-dotenv>=1.0.0
-pip install pandas>=1.5.0
+curl -X POST \
+  -H "Accept: application/vnd.github.v3+json" \
+  -H "Authorization: token YOUR_GITHUB_TOKEN" \
+  https://api.github.com/repos/k190513120/mysql_to_base/dispatches \
+  -d '{
+    "event_type": "sync-mysql-to-base",
+    "client_payload": {
+      "mysql_host": "your-mysql-host.com",
+      "mysql_port": "3306",
+      "mysql_username": "your-username",
+      "mysql_password": "your-password",
+      "mysql_database": "your-database",
+      "app_token": "your-feishu-app-token",
+      "personal_base_token": "your-feishu-personal-token"
+    }
+  }'
 ```
 
-### 2. 安装飞书Base Open SDK
+#### 2. 手动触发 (Workflow Dispatch)
+
+1. 访问 [GitHub Actions页面](https://github.com/k190513120/mysql_to_base/actions)
+2. 选择 "MySQL to Base Sync" 工作流
+3. 点击 "Run workflow"
+4. 填入必要的参数
+5. 点击 "Run workflow" 开始同步
+
+### 方法2: 本地运行
+
+1. 克隆仓库：
 ```bash
-pip install https://lf3-static.bytednsdoc.com/obj/eden-cn/lmeh7phbozvhoz/base-open-sdk/baseopensdk-0.0.13-py3-none-any.whl
+git clone https://github.com/k190513120/mysql_to_base.git
+cd mysql_to_base
 ```
 
-或者使用requirements.txt一键安装：
+2. 安装依赖：
 ```bash
 pip install -r requirements.txt
-# 然后手动安装Base Open SDK
-pip install https://lf3-static.bytednsdoc.com/obj/eden-cn/lmeh7phbozvhoz/base-open-sdk/baseopensdk-0.0.13-py3-none-any.whl
 ```
 
-## 配置说明
-
-### 1. 获取飞书多维表格配置
-
-#### APP_TOKEN（Base ID）
-1. 打开你的飞书多维表格
-2. 从URL中获取APP_TOKEN：`https://xxx.feishu.cn/base/{APP_TOKEN}/...`
-3. 或使用【开发工具】插件快速获取
-
-#### PERSONAL_BASE_TOKEN
-1. 在飞书多维表格中点击右上角的"..."
-2. 选择"高级设置" → "开发者选项"
-3. 创建个人访问令牌（Personal Base Token）
-4. 复制生成的token
-
-### 2. MySQL数据库配置
-
-确保你有以下MySQL连接信息：
-- 数据库地址
-- 端口（通常是3306）
-- 用户名
-- 密码
-- 数据库名
-
-## 使用方法
-
-### 直接运行
+3. 设置环境变量：
 ```bash
-python mysql_to_base_sync.py
+export MYSQL_HOST="your-mysql-host.com"
+export MYSQL_PORT="3306"
+export MYSQL_USERNAME="your-username"
+export MYSQL_PASSWORD="your-password"
+export MYSQL_DATABASE="your-database"
+export APP_TOKEN="your-feishu-app-token"
+export PERSONAL_BASE_TOKEN="your-feishu-personal-token"
 ```
 
-运行后按提示输入：
-- MySQL数据库名
-- 飞书多维表格APP_TOKEN
-- 飞书多维表格PERSONAL_BASE_TOKEN
-
-### 使用环境变量（推荐）
-
-创建`.env`文件：
-```env
-# MySQL配置
-MYSQL_HOST=rm-zf81e68a31gsqv1c7zo.mysql.kualalumpur.rds.aliyuncs.com
-MYSQL_PORT=3306
-MYSQL_USERNAME=writer_readonly
-MYSQL_PASSWORD=c*xZ%BEu2VikL%G
-MYSQL_DATABASE=your_database_name
-
-# 飞书多维表格配置
-APP_TOKEN=your_app_token
-PERSONAL_BASE_TOKEN=your_personal_base_token
+4. 运行同步：
+```bash
+python api.py
 ```
 
-然后修改脚本使用环境变量：
-```python
-from dotenv import load_dotenv
-import os
+## 配置参数说明
 
-load_dotenv()
+### MySQL配置
+- `mysql_host`: MySQL服务器地址
+- `mysql_port`: MySQL端口号（默认3306）
+- `mysql_username`: MySQL用户名
+- `mysql_password`: MySQL密码
+- `mysql_database`: 要同步的数据库名
 
-mysql_config = MySQLConfig(
-    host=os.getenv('MYSQL_HOST'),
-    port=int(os.getenv('MYSQL_PORT', 3306)),
-    username=os.getenv('MYSQL_USERNAME'),
-    password=os.getenv('MYSQL_PASSWORD'),
-    database=os.getenv('MYSQL_DATABASE')
-)
+### 飞书多维表格配置
+- `app_token`: 飞书多维表格的APP_TOKEN
+- `personal_base_token`: 飞书多维表格的个人访问令牌
 
-base_config = BaseConfig(
-    app_token=os.getenv('APP_TOKEN'),
-    personal_base_token=os.getenv('PERSONAL_BASE_TOKEN')
-)
+## 获取飞书配置
+
+### 1. 获取APP_TOKEN
+1. 打开飞书多维表格
+2. 在浏览器地址栏中找到类似 `https://example.feishu.cn/base/FCVLbcAccazgKdsnZEhcKYG7n7g` 的URL
+3. `FCVLbcAccazgKdsnZEhcKYG7n7g` 就是APP_TOKEN
+
+### 2. 获取PERSONAL_BASE_TOKEN
+1. 访问 [飞书开放平台](https://open.feishu.cn/)
+2. 创建应用并获取访问令牌
+3. 或使用个人访问令牌
+
+## API接口
+
+### 触发同步
+
+**POST** `/sync` (如果部署为Web服务)
+
+请求体：
+```json
+{
+  "mysql_host": "your-mysql-host.com",
+  "mysql_port": 3306,
+  "mysql_username": "your-username",
+  "mysql_password": "your-password",
+  "mysql_database": "your-database",
+  "app_token": "your-feishu-app-token",
+  "personal_base_token": "your-feishu-personal-token"
+}
 ```
 
-## 数据类型映射
+响应：
+```json
+{
+  "success": true,
+  "message": "同步完成",
+  "results": {
+    "table1": true,
+    "table2": true
+  }
+}
+```
 
-| MySQL类型 | 飞书多维表格类型 | 说明 |
-|-----------|------------------|------|
-| INT, BIGINT, FLOAT, DOUBLE | Number | 数值类型 |
-| VARCHAR, TEXT | Text | 文本类型 |
-| DATE, DATETIME, TIMESTAMP | DateTime | 日期时间类型 |
-| BOOLEAN | Checkbox | 复选框类型 |
-| ENUM | SingleSelect | 单选类型 |
-| SET | MultiSelect | 多选类型 |
-| BLOB | Attachment | 附件类型 |
+## 测试示例
 
-## 同步逻辑
+使用提供的测试配置：
 
-1. **表创建**：检查飞书多维表格中是否存在同名表，不存在则自动创建
-2. **数据同步**：
-   - 获取MySQL表数据
-   - 转换数据类型
-   - 检查记录是否已存在（基于字段值哈希）
-   - 新记录：批量创建
-   - 已存在记录：批量更新
-3. **错误处理**：记录详细错误信息，支持部分失败继续执行
-
-## 日志文件
-
-同步过程会生成`sync.log`日志文件，包含：
-- 连接状态
-- 同步进度
-- 错误信息
-- 性能统计
+```bash
+curl -X POST \
+  -H "Accept: application/vnd.github.v3+json" \
+  -H "Authorization: token YOUR_GITHUB_TOKEN" \
+  https://api.github.com/repos/k190513120/mysql_to_base/dispatches \
+  -d '{
+    "event_type": "sync-mysql-to-base",
+    "client_payload": {
+      "mysql_host": "rm-zf81e68a31gsqv1c7zo.mysql.kualalumpur.rds.aliyuncs.com",
+      "mysql_port": "3306",
+      "mysql_username": "writer_readonly",
+      "mysql_password": "c*xZ%BEu2VikL%G",
+      "mysql_database": "written",
+      "app_token": "FCVLbcAccazgKdsnZEhcKYG7n7g",
+      "personal_base_token": "pt-uNh9p5Wra6j8XEVOWwF0pZuBOpxfu8K9X5sF2WiZAQAAAkCBYAQAEWvFeL6P"
+    }
+  }'
+```
 
 ## 注意事项
 
-1. **API限制**：飞书多维表格API有频率限制（2QPS），脚本已内置延迟处理
-2. **数据量**：大数据量同步建议分批进行，避免超时
-3. **权限**：确保MySQL用户有读取权限，飞书token有写入权限
-4. **备份**：建议在同步前备份重要数据
-5. **网络**：确保网络连接稳定，支持访问飞书API
+1. **权限要求**：确保MySQL用户有读取权限，飞书令牌有创建和编辑表格权限
+2. **网络连接**：GitHub Actions需要能够访问你的MySQL服务器
+3. **数据安全**：敏感信息建议使用GitHub Secrets存储
+4. **频率限制**：避免频繁触发同步，建议设置合理的同步间隔
 
 ## 故障排除
 
 ### 常见错误
 
 1. **MySQL连接失败**
-   - 检查网络连接
-   - 验证数据库地址、端口、用户名、密码
-   - 确认数据库存在
+   - 检查主机地址、端口、用户名和密码
+   - 确认网络连接和防火墙设置
 
 2. **飞书API调用失败**
    - 检查APP_TOKEN和PERSONAL_BASE_TOKEN是否正确
-   - 确认token权限是否足够
-   - 检查网络是否能访问飞书API
+   - 确认令牌权限是否足够
 
-3. **数据类型转换错误**
-   - 查看日志文件了解具体错误
-   - 检查MySQL表结构是否包含不支持的数据类型
+3. **字段创建失败**
+   - 检查字段名是否符合飞书规范
+   - 确认数据类型映射是否正确
 
-### 性能优化
+## 贡献
 
-1. **批量大小**：可调整`batch_size`参数优化性能
-2. **并发控制**：避免同时运行多个同步任务
-3. **增量同步**：定期运行脚本，利用增量同步减少数据传输
-
-## 开发说明
-
-### 项目结构
-```
-mysql_to_base_sync.py    # 主程序文件
-requirements.txt         # 依赖包列表
-README.md               # 使用说明
-sync.log                # 同步日志（运行后生成）
-.env                    # 环境变量配置（可选）
-```
-
-### 核心类说明
-
-- `MySQLConfig`: MySQL数据库配置
-- `BaseConfig`: 飞书多维表格配置
-- `DataTypeMapper`: 数据类型映射器
-- `MySQLToBaseSync`: 主同步器类
+欢迎提交Issue和Pull Request来改进这个项目！
 
 ## 许可证
 
-本项目仅供学习和内部使用，请遵守相关服务的使用条款。
-
-## 支持
-
-如有问题，请查看日志文件或联系开发者。
+MIT License
