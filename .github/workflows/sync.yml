@@ -59,7 +59,8 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install pymysql requests python-dotenv
+        pip install pymysql requests python-dotenv pandas
+        pip install https://lf3-static.bytednsdoc.com/obj/eden-cn/lmeh7phbozvhoz/base-open-sdk/baseopensdk-0.0.13-py3-none-any.whl
     
     - name: Set environment variables from repository_dispatch
       if: github.event_name == 'repository_dispatch'
