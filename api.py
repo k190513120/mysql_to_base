@@ -30,6 +30,9 @@ def lambda_handler(event: Dict[str, Any], context: Any = None) -> Dict[str, Any]
             'app_token', 'personal_base_token'
         ]
         
+        # region参数是可选的，默认为domestic
+        region = body.get('region', 'domestic')
+        
         missing_params = [param for param in required_params if not body.get(param)]
         if missing_params:
             return {
@@ -48,7 +51,8 @@ def lambda_handler(event: Dict[str, Any], context: Any = None) -> Dict[str, Any]
             mysql_password=body['mysql_password'],
             mysql_database=body['mysql_database'],
             app_token=body['app_token'],
-            personal_base_token=body['personal_base_token']
+            personal_base_token=body['personal_base_token'],
+            region=region
         )
         
         return {
@@ -82,13 +86,14 @@ def main():
             'mysql_password': os.getenv('MYSQL_PASSWORD'),
             'mysql_database': os.getenv('MYSQL_DATABASE'),
             'app_token': os.getenv('APP_TOKEN'),
-            'personal_base_token': os.getenv('PERSONAL_BASE_TOKEN')
+            'personal_base_token': os.getenv('PERSONAL_BASE_TOKEN'),
+            'region': os.getenv('REGION', 'domestic')
         }
         
         # 验证配置
         missing_vars = [k for k, v in config.items() if not v]
         if missing_vars:
-            print(f"错误: 缺少环境变量: {", ".join(missing_vars)}")
+            print(f"错误: 缺少环境变量: {', '.join(missing_vars)}")
             sys.exit(1)
         
         print("开始同步...")

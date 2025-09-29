@@ -34,6 +34,14 @@ on:
         description: '飞书多维表格PERSONAL_BASE_TOKEN'
         required: true
         type: string
+      region:
+        description: '区域选择 (domestic: 国内飞书, overseas: 海外Lark)'
+        required: false
+        default: 'domestic'
+        type: choice
+        options:
+          - domestic
+          - overseas
 
 jobs:
   sync:
@@ -63,6 +71,7 @@ jobs:
         echo "MYSQL_DATABASE=${{ github.event.client_payload.mysql_database }}" >> $GITHUB_ENV
         echo "APP_TOKEN=${{ github.event.client_payload.app_token }}" >> $GITHUB_ENV
         echo "PERSONAL_BASE_TOKEN=${{ github.event.client_payload.personal_base_token }}" >> $GITHUB_ENV
+        echo "REGION=${{ github.event.client_payload.region || 'domestic' }}" >> $GITHUB_ENV
     
     - name: Set environment variables from workflow_dispatch
       if: github.event_name == 'workflow_dispatch'
@@ -74,6 +83,7 @@ jobs:
         echo "MYSQL_DATABASE=${{ github.event.inputs.mysql_database }}" >> $GITHUB_ENV
         echo "APP_TOKEN=${{ github.event.inputs.app_token }}" >> $GITHUB_ENV
         echo "PERSONAL_BASE_TOKEN=${{ github.event.inputs.personal_base_token }}" >> $GITHUB_ENV
+        echo "REGION=${{ github.event.inputs.region }}" >> $GITHUB_ENV
     
     - name: Run MySQL to Base sync
       id: sync

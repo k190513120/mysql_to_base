@@ -33,7 +33,8 @@ curl -X POST \
       "mysql_password": "your-password",
       "mysql_database": "your-database",
       "app_token": "your-feishu-app-token",
-      "personal_base_token": "your-feishu-personal-token"
+      "personal_base_token": "your-feishu-personal-token",
+      "region": "domestic"
     }
   }'
 ```
@@ -68,6 +69,7 @@ export MYSQL_PASSWORD="your-password"
 export MYSQL_DATABASE="your-database"
 export APP_TOKEN="your-feishu-app-token"
 export PERSONAL_BASE_TOKEN="your-feishu-personal-token"
+export REGION="domestic"
 ```
 
 4. 运行同步：
@@ -87,6 +89,9 @@ python api.py
 ### 飞书多维表格配置
 - `app_token`: 飞书多维表格的APP_TOKEN
 - `personal_base_token`: 飞书多维表格的个人访问令牌
+- `region`: 区域选择，支持以下值：
+  - `domestic`: 国内飞书（默认值）
+  - `overseas`: 海外Lark
 
 ## 获取飞书配置
 
@@ -115,7 +120,8 @@ python api.py
   "mysql_password": "your-password",
   "mysql_database": "your-database",
   "app_token": "your-feishu-app-token",
-  "personal_base_token": "your-feishu-personal-token"
+  "personal_base_token": "your-feishu-personal-token",
+  "region": "domestic"
 }
 ```
 
@@ -133,6 +139,8 @@ python api.py
 
 ## 测试示例
 
+### 国内飞书同步示例
+
 使用提供的测试配置：
 
 ```bash
@@ -149,7 +157,30 @@ curl -X POST \
       "mysql_password": "c*xZ%BEu2VikL%G",
       "mysql_database": "written",
       "app_token": "FCVLbcAccazgKdsnZEhcKYG7n7g",
-      "personal_base_token": "pt-uNh9p5Wra6j8XEVOWwF0pZuBOpxfu8K9X5sF2WiZAQAAAkCBYAQAEWvFeL6P"
+      "personal_base_token": "pt-uNh9p5Wra6j8XEVOWwF0pZuBOpxfu8K9X5sF2WiZAQAAAkCBYAQAEWvFeL6P",
+      "region": "domestic"
+    }
+  }'
+```
+
+### 海外Lark同步示例
+
+```bash
+curl -X POST \
+  -H "Accept: application/vnd.github.v3+json" \
+  -H "Authorization: token YOUR_GITHUB_TOKEN" \
+  https://api.github.com/repos/k190513120/mysql_to_base/dispatches \
+  -d '{
+    "event_type": "sync-mysql-to-base",
+    "client_payload": {
+      "mysql_host": "your-mysql-host.com",
+      "mysql_port": "3306",
+      "mysql_username": "your-username",
+      "mysql_password": "your-password",
+      "mysql_database": "your-database",
+      "app_token": "your-lark-app-token",
+      "personal_base_token": "your-lark-personal-token",
+      "region": "overseas"
     }
   }'
 ```

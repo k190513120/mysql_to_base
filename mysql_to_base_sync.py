@@ -16,7 +16,7 @@ from dataclasses import dataclass
 import time
 
 import pymysql
-from baseopensdk import BaseClient
+from baseopensdk import BaseClient, LARK_DOMAIN, FEISHU_DOMAIN
 from baseopensdk.api.base.v1 import *
 
 
@@ -35,6 +35,7 @@ class BaseConfig:
     """飞书多维表格配置"""
     app_token: str
     personal_base_token: str
+    region: str = 'domestic'  # 'domestic' for 国内飞书, 'overseas' for 海外Lark
 
 
 class DataTypeMapper:
@@ -186,11 +187,17 @@ class MySQLToBaseSync:
     def connect_base(self) -> bool:
         """连接飞书多维表格"""
         try:
+            # 根据区域选择domain
+            domain = LARK_DOMAIN if self.base_config.region == 'overseas' else FEISHU_DOMAIN
+            
             self.base_client = BaseClient.builder() \
                 .app_token(self.base_config.app_token) \
                 .personal_base_token(self.base_config.personal_base_token) \
+                .domain(domain) \
                 .build()
-            self.logger.info("成功连接到飞书多维表格")
+            
+            region_name = "海外Lark" if self.base_config.region == 'overseas' else "国内飞书"
+            self.logger.info(f"成功连接到{region_name}多维表格")
             return True
         except Exception as e:
             self.logger.error(f"连接飞书多维表格失败: {e}")
@@ -636,7 +643,8 @@ class MySQLToBaseSync:
 
 def sync_with_config(mysql_host: str, mysql_port: int, mysql_username: str, 
                      mysql_password: str, mysql_database: str, 
-                     app_token: str, personal_base_token: str) -> Dict[str, bool]:
+                     app_token: str, personal_base_token: str, 
+                     region: str = 'domestic') -> Dict[str, bool]:
     """使用指定配置进行同步"""
     mysql_config = MySQLConfig(
         host=mysql_host,
@@ -648,7 +656,8 @@ def sync_with_config(mysql_host: str, mysql_port: int, mysql_username: str,
     
     base_config = BaseConfig(
         app_token=app_token,
-        personal_base_token=personal_base_token
+        personal_base_token=personal_base_token,
+        region=region
     )
     
     # 创建同步器
