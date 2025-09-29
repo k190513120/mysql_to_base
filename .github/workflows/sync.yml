@@ -1,0 +1,88 @@
+name: MySQL to Base Sync
+
+on:
+  repository_dispatch:
+    types: [sync-mysql-to-base]
+  workflow_dispatch:
+    inputs:
+      mysql_host:
+        description: 'MySQL主机地址'
+        required: true
+        type: string
+      mysql_port:
+        description: 'MySQL端口'
+        required: true
+        default: '3306'
+        type: string
+      mysql_username:
+        description: 'MySQL用户名'
+        required: true
+        type: string
+      mysql_password:
+        description: 'MySQL密码'
+        required: true
+        type: string
+      mysql_database:
+        description: 'MySQL数据库名'
+        required: true
+        type: string
+      app_token:
+        description: '飞书多维表格APP_TOKEN'
+        required: true
+        type: string
+      personal_base_token:
+        description: '飞书多维表格PERSONAL_BASE_TOKEN'
+        required: true
+        type: string
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pymysql requests python-dotenv
+    
+    - name: Set environment variables from repository_dispatch
+      if: github.event_name == 'repository_dispatch'
+      run: |
+        echo "MYSQL_HOST=${{ github.event.client_payload.mysql_host }}" >> $GITHUB_ENV
+        echo "MYSQL_PORT=${{ github.event.client_payload.mysql_port }}" >> $GITHUB_ENV
+        echo "MYSQL_USERNAME=${{ github.event.client_payload.mysql_username }}" >> $GITHUB_ENV
+        echo "MYSQL_PASSWORD=${{ github.event.client_payload.mysql_password }}" >> $GITHUB_ENV
+        echo "MYSQL_DATABASE=${{ github.event.client_payload.mysql_database }}" >> $GITHUB_ENV
+        echo "APP_TOKEN=${{ github.event.client_payload.app_token }}" >> $GITHUB_ENV
+        echo "PERSONAL_BASE_TOKEN=${{ github.event.client_payload.personal_base_token }}" >> $GITHUB_ENV
+    
+    - name: Set environment variables from workflow_dispatch
+      if: github.event_name == 'workflow_dispatch'
+      run: |
+        echo "MYSQL_HOST=${{ github.event.inputs.mysql_host }}" >> $GITHUB_ENV
+        echo "MYSQL_PORT=${{ github.event.inputs.mysql_port }}" >> $GITHUB_ENV
+        echo "MYSQL_USERNAME=${{ github.event.inputs.mysql_username }}" >> $GITHUB_ENV
+        echo "MYSQL_PASSWORD=${{ github.event.inputs.mysql_password }}" >> $GITHUB_ENV
+        echo "MYSQL_DATABASE=${{ github.event.inputs.mysql_database }}" >> $GITHUB_ENV
+        echo "APP_TOKEN=${{ github.event.inputs.app_token }}" >> $GITHUB_ENV
+        echo "PERSONAL_BASE_TOKEN=${{ github.event.inputs.personal_base_token }}" >> $GITHUB_ENV
+    
+    - name: Run MySQL to Base sync
+      id: sync
+      run: |
+        python api.py
+      env:
+        GITHUB_ACTIONS: true
+    
+    - name: Output results
+      run: |
+        echo "同步任务完成"
+        echo "结果: ${{ steps.sync.outputs.sync_results }}"

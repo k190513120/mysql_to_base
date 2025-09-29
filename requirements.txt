@@ -1,0 +1,25 @@
+# MySQL到飞书多维表格同步工具依赖包
+
+# MySQL数据库连接
+PyMySQL>=1.0.2
+
+# 飞书多维表格SDK
+# 注意：需要从官方提供的链接安装
+# pip install https://lf3-static.bytednsdoc.com/obj/eden-cn/lmeh7phbozvhoz/base-open-sdk/baseopensdk-0.0.13-py3-none-any.whl
+
+# 环境变量管理（可选）
+python-dotenv>=1.0.0
+
+# 数据处理
+pandas>=1.5.0
+
+# 日志和时间处理（Python内置，无需安装）
+# logging
+# datetime
+# hashlib
+# time
+# json
+# os
+# sys
+# typing
+# dataclasses
