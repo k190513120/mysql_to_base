@@ -2,3 +2,5 @@
 2025-09-30 09:45:06,928 - mysql_to_base_sync - ERROR - 同步失败: MySQL连接失败
 2025-09-30 09:45:19,663 - mysql_to_base_sync - ERROR - 连接MySQL数据库失败: (1045, "Access denied for user 'test_user'@'localhost' (using password: YES)")
 2025-09-30 09:45:19,663 - mysql_to_base_sync - ERROR - 同步失败: MySQL连接失败
+2025-09-30 09:46:45,748 - mysql_to_base_sync - ERROR - 连接MySQL数据库失败: (1045, "Access denied for user 'root'@'61.141.241.114' (using password: YES)")
+2025-09-30 09:46:45,749 - mysql_to_base_sync - ERROR - 同步失败: MySQL连接失败
