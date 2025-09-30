@@ -79,9 +79,13 @@ def main():
     """
     try:
         # 从环境变量读取配置
+        mysql_port_str = os.getenv('MYSQL_PORT', '3306')
+        if not mysql_port_str or mysql_port_str.strip() == '':
+            mysql_port_str = '3306'
+        
         config = {
             'mysql_host': os.getenv('MYSQL_HOST'),
-            'mysql_port': int(os.getenv('MYSQL_PORT', '3306')),
+            'mysql_port': int(mysql_port_str),
             'mysql_username': os.getenv('MYSQL_USERNAME'),
             'mysql_password': os.getenv('MYSQL_PASSWORD'),
             'mysql_database': os.getenv('MYSQL_DATABASE'),
@@ -90,10 +94,12 @@ def main():
             'region': os.getenv('REGION', 'domestic')
         }
         
-        # 验证配置
-        missing_vars = [k for k, v in config.items() if not v]
+        # 验证配置（排除region，它有默认值）
+        required_vars = ['mysql_host', 'mysql_username', 'mysql_password', 'mysql_database', 'app_token', 'personal_base_token']
+        missing_vars = [k for k in required_vars if not config.get(k) or str(config.get(k)).strip() == '']
         if missing_vars:
-            print(f"错误: 缺少环境变量: {', '.join(missing_vars)}")
+            print(f"错误: 以下环境变量缺失或为空: {', '.join([var.upper() for var in missing_vars])}")
+            print("请检查GitHub Action的环境变量设置")
             sys.exit(1)
         
         print("开始同步...")
