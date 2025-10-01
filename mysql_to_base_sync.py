@@ -384,8 +384,8 @@ class MySQLToBaseSync:
             self.logger.error(f"获取表 {table_name} 主键失败: {e}")
             return None
     
-    def get_existing_records(self, table_id: str) -> Dict[str, str]:
-        """获取飞书表格中已存在的记录"""
+    def get_existing_records(self, table_id: str, primary_key: Optional[str] = None) -> Dict[str, str]:
+        """获取飞书表格中已存在的记录，基于主键字段建立映射"""
         try:
             existing_records = {}
             page_token = None
@@ -407,12 +407,17 @@ class MySQLToBaseSync:
                 
                 if hasattr(response.data, 'items') and response.data.items:
                     for record in response.data.items:
-                        # 使用记录的所有字段值生成唯一标识
-                        field_values = []
-                        for key, value in record.fields.items():
-                            field_values.append(f"{key}:{value}")
-                        record_hash = hashlib.md5('|'.join(sorted(field_values)).encode()).hexdigest()
-                        existing_records[record_hash] = record.record_id
+                        if primary_key and primary_key in record.fields:
+                            # 使用主键字段值作为唯一标识
+                            primary_key_value = str(record.fields[primary_key])
+                            existing_records[primary_key_value] = record.record_id
+                        else:
+                            # 如果没有主键或主键字段不存在，回退到使用所有字段值的哈希
+                            field_values = []
+                            for key, value in record.fields.items():
+                                field_values.append(f"{key}:{value}")
+                            record_hash = hashlib.md5('|'.join(sorted(field_values)).encode()).hexdigest()
+                            existing_records[record_hash] = record.record_id
                 
                 # 检查是否有下一页
                 if hasattr(response.data, 'has_more') and response.data.has_more:
@@ -422,7 +427,10 @@ class MySQLToBaseSync:
                 
                 time.sleep(0.2)  # 避免频率限制
             
-            self.logger.info(f"获取到 {len(existing_records)} 条已存在记录")
+            if primary_key:
+                self.logger.info(f"获取到 {len(existing_records)} 条已存在记录（基于主键 {primary_key}）")
+            else:
+                self.logger.info(f"获取到 {len(existing_records)} 条已存在记录（基于全字段哈希）")
             return existing_records
             
         except Exception as e:
@@ -439,7 +447,7 @@ class MySQLToBaseSync:
             # 获取已存在的记录（用于去重和更新）
             existing_records = {}
             if incremental:
-                existing_records = self.get_existing_records(base_table_id)
+                existing_records = self.get_existing_records(base_table_id, primary_key)
             
             # 分批获取数据
             batch_size = 500
@@ -471,21 +479,30 @@ class MySQLToBaseSync:
                         continue
                     
                     # 生成记录唯一标识
-                    field_values = []
-                    for key, value in fields.items():
-                        field_values.append(f"{key}:{value}")
-                    record_hash = hashlib.md5('|'.join(sorted(field_values)).encode()).hexdigest()
+                    if primary_key and primary_key in fields:
+                        # 使用主键字段值作为唯一标识
+                        record_key = str(fields[primary_key])
+                    else:
+                        # 如果没有主键，回退到使用所有字段值的哈希
+                        field_values = []
+                        for key, value in fields.items():
+                            field_values.append(f"{key}:{value}")
+                        record_key = hashlib.md5('|'.join(sorted(field_values)).encode()).hexdigest()
                     
                     # 检查记录是否已存在
-                    if incremental and record_hash in existing_records:
+                    if incremental and record_key in existing_records:
                         # 记录已存在，准备更新
                         update_records.append({
-                            'record_id': existing_records[record_hash],
+                            'record_id': existing_records[record_key],
                             'fields': fields
                         })
+                        if primary_key:
+                            self.logger.debug(f"准备更新记录，主键 {primary_key}={record_key}")
                     else:
                         # 新记录，准备创建
                         new_records.append({'fields': fields})
+                        if primary_key:
+                            self.logger.debug(f"准备创建新记录，主键 {primary_key}={record_key}")
                 
                 # 批量创建新记录
                 if new_records:
