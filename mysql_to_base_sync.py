@@ -131,15 +131,77 @@ class DataTypeMapper:
             return str(value) if value is not None else None
 
 
+# 飞书 Base 的瞬时错误关键词（出现这些就重试）
+_TRANSIENT_MSG_KEYWORDS = (
+    'data not ready',
+    'try again',
+    'timeout',
+    'rate limit',
+    'too many request',
+    'service unavailable',
+    'internal error',
+)
+
+
+def _is_transient_error(response) -> bool:
+    """判断飞书 API 响应是否是可重试的瞬时错误"""
+    msg = (getattr(response, 'msg', '') or '').lower()
+    if any(kw in msg for kw in _TRANSIENT_MSG_KEYWORDS):
+        return True
+    # 已知的瞬时错误码
+    code = getattr(response, 'code', None)
+    return code in (1254290, 1254607, 91402, 99991400, 99991663, 99991672)
+
+
 class MySQLToBaseSync:
     """MySQL到飞书多维表格同步器"""
-    
+
     def __init__(self, mysql_config: MySQLConfig, base_config: BaseConfig):
         self.mysql_config = mysql_config
         self.base_config = base_config
         self.mysql_conn = None
         self.base_client = None
         self.logger = self._setup_logger()
+
+    def _call_with_retry(self, op_name: str, fn, max_retries: int = 5):
+        """对一次飞书 API 调用做指数退避重试。
+
+        - 成功（response.success() == True）→ 返回 response
+        - 瞬时错误（_is_transient_error）→ 退避重试
+        - 非瞬时错误或重试用尽 → 抛 RuntimeError
+        - 调用本身抛异常 → 同样退避重试，最后一次仍抛则向上抛
+        """
+        last_err = None
+        for attempt in range(max_retries):
+            try:
+                response = fn()
+                if response.success():
+                    return response
+                if _is_transient_error(response) and attempt < max_retries - 1:
+                    wait = 2 ** attempt
+                    self.logger.warning(
+                        f"{op_name} 瞬时错误 [code={getattr(response, 'code', None)}] "
+                        f"{getattr(response, 'msg', '')}，{wait}s 后第 {attempt + 2}/{max_retries} 次重试"
+                    )
+                    time.sleep(wait)
+                    continue
+                raise RuntimeError(
+                    f"{op_name} 失败: code={getattr(response, 'code', None)} "
+                    f"msg={getattr(response, 'msg', '')}"
+                )
+            except RuntimeError:
+                raise
+            except Exception as e:
+                last_err = e
+                if attempt < max_retries - 1:
+                    wait = 2 ** attempt
+                    self.logger.warning(
+                        f"{op_name} 调用异常: {e}，{wait}s 后第 {attempt + 2}/{max_retries} 次重试"
+                    )
+                    time.sleep(wait)
+                    continue
+                raise
+        raise RuntimeError(f"{op_name} 重试 {max_retries} 次仍失败: {last_err}")
         
     def _setup_logger(self) -> logging.Logger:
         """设置日志记录器"""
@@ -385,57 +447,48 @@ class MySQLToBaseSync:
             return None
     
     def get_existing_records(self, table_id: str, primary_key: Optional[str] = None) -> Dict[str, str]:
-        """获取飞书表格中已存在的记录，基于主键字段建立映射"""
-        try:
-            existing_records = {}
-            page_token = None
-            
-            while True:
-                request_builder = ListAppTableRecordRequest.builder() \
+        """获取飞书表格中已存在的记录，基于主键字段建立映射。
+
+        任何分页失败都会抛异常 —— 调用方必须捕获并中止该表同步，
+        绝不能拿残缺/空的去重表去做写入（否则会全表当作新记录批量插入造成重复）。
+        """
+        existing_records: Dict[str, str] = {}
+        page_token = None
+
+        while True:
+            def _do_list(_pt=page_token):
+                builder = ListAppTableRecordRequest.builder() \
                     .table_id(table_id) \
                     .page_size(500)
-                
-                if page_token:
-                    request_builder.page_token(page_token)
-                
-                request = request_builder.build()
-                response = self.base_client.base.v1.app_table_record.list(request)
-                
-                if not response.success():
-                    self.logger.error(f"获取已存在记录失败: {response.msg}")
-                    break
-                
-                if hasattr(response.data, 'items') and response.data.items:
-                    for record in response.data.items:
-                        if primary_key and primary_key in record.fields:
-                            # 使用主键字段值作为唯一标识
-                            primary_key_value = str(record.fields[primary_key])
-                            existing_records[primary_key_value] = record.record_id
-                        else:
-                            # 如果没有主键或主键字段不存在，回退到使用所有字段值的哈希
-                            field_values = []
-                            for key, value in record.fields.items():
-                                field_values.append(f"{key}:{value}")
-                            record_hash = hashlib.md5('|'.join(sorted(field_values)).encode()).hexdigest()
-                            existing_records[record_hash] = record.record_id
-                
-                # 检查是否有下一页
-                if hasattr(response.data, 'has_more') and response.data.has_more:
-                    page_token = response.data.page_token
-                else:
-                    break
-                
-                time.sleep(0.2)  # 避免频率限制
-            
-            if primary_key:
-                self.logger.info(f"获取到 {len(existing_records)} 条已存在记录（基于主键 {primary_key}）")
+                if _pt:
+                    builder.page_token(_pt)
+                return self.base_client.base.v1.app_table_record.list(builder.build())
+
+            response = self._call_with_retry(f"列出表 {table_id} 已存在记录", _do_list)
+
+            if hasattr(response.data, 'items') and response.data.items:
+                for record in response.data.items:
+                    if primary_key and primary_key in record.fields:
+                        primary_key_value = str(record.fields[primary_key])
+                        existing_records[primary_key_value] = record.record_id
+                    else:
+                        field_values = []
+                        for key, value in record.fields.items():
+                            field_values.append(f"{key}:{value}")
+                        record_hash = hashlib.md5('|'.join(sorted(field_values)).encode()).hexdigest()
+                        existing_records[record_hash] = record.record_id
+
+            if hasattr(response.data, 'has_more') and response.data.has_more:
+                page_token = response.data.page_token
+                time.sleep(0.2)
             else:
-                self.logger.info(f"获取到 {len(existing_records)} 条已存在记录（基于全字段哈希）")
-            return existing_records
-            
-        except Exception as e:
-            self.logger.error(f"获取已存在记录失败: {e}")
-            return {}
+                break
+
+        if primary_key:
+            self.logger.info(f"获取到 {len(existing_records)} 条已存在记录（基于主键 {primary_key}）")
+        else:
+            self.logger.info(f"获取到 {len(existing_records)} 条已存在记录（基于全字段哈希）")
+        return existing_records
     
     def sync_table_data(self, mysql_table: str, base_table_id: str, schema: List[Dict], incremental: bool = True) -> bool:
         """同步表数据（支持增量同步）"""
@@ -447,7 +500,14 @@ class MySQLToBaseSync:
             # 获取已存在的记录（用于去重和更新）
             existing_records = {}
             if incremental:
-                existing_records = self.get_existing_records(base_table_id, primary_key)
+                try:
+                    existing_records = self.get_existing_records(base_table_id, primary_key)
+                except Exception as e:
+                    # 拿不到完整去重表 → 中止该表同步，避免把所有 MySQL 行当新记录批量插入造成重复
+                    self.logger.error(
+                        f"表 {mysql_table} 获取已存在记录失败，跳过本次同步以避免重复写入: {e}"
+                    )
+                    return False
             
             # 分批获取数据
             batch_size = 500
@@ -538,67 +598,57 @@ class MySQLToBaseSync:
             return False
     
     def _batch_update_records(self, table_id: str, records: List[Dict]) -> bool:
-        """批量更新记录"""
+        """批量更新记录（带瞬时错误重试）"""
         try:
-            # 飞书API限制每次最多更新500条记录
-            max_batch_size = 500
-            
+            max_batch_size = 500  # 飞书 API 限制每次最多 500 条
+
             for i in range(0, len(records), max_batch_size):
                 batch_records = records[i:i + max_batch_size]
-                
-                request = BatchUpdateAppTableRecordRequest.builder() \
-                    .table_id(table_id) \
-                    .request_body(
-                        BatchUpdateAppTableRecordRequestBody.builder()
-                        .records(batch_records)
+
+                def _do_update(_batch=batch_records):
+                    request = BatchUpdateAppTableRecordRequest.builder() \
+                        .table_id(table_id) \
+                        .request_body(
+                            BatchUpdateAppTableRecordRequestBody.builder()
+                            .records(_batch)
+                            .build()
+                        ) \
                         .build()
-                    ) \
-                    .build()
-                
-                response = self.base_client.base.v1.app_table_record.batch_update(request)
-                
-                if not response.success():
-                    self.logger.error(f"批量更新记录失败: {response.msg}")
-                    return False
-                
-                # 添加延迟避免频率限制
+                    return self.base_client.base.v1.app_table_record.batch_update(request)
+
+                self._call_with_retry(f"批量更新表 {table_id} 记录", _do_update)
                 time.sleep(0.5)
-            
+
             return True
-            
+
         except Exception as e:
             self.logger.error(f"批量更新记录失败: {e}")
             return False
-    
+
     def _batch_create_records(self, table_id: str, records: List[Dict]) -> bool:
-        """批量创建记录"""
+        """批量创建记录（带瞬时错误重试）"""
         try:
-            # 飞书API限制每次最多创建500条记录
             max_batch_size = 500
-            
+
             for i in range(0, len(records), max_batch_size):
                 batch_records = records[i:i + max_batch_size]
-                
-                request = BatchCreateAppTableRecordRequest.builder() \
-                    .table_id(table_id) \
-                    .request_body(
-                        BatchCreateAppTableRecordRequestBody.builder()
-                        .records(batch_records)
+
+                def _do_create(_batch=batch_records):
+                    request = BatchCreateAppTableRecordRequest.builder() \
+                        .table_id(table_id) \
+                        .request_body(
+                            BatchCreateAppTableRecordRequestBody.builder()
+                            .records(_batch)
+                            .build()
+                        ) \
                         .build()
-                    ) \
-                    .build()
-                
-                response = self.base_client.base.v1.app_table_record.batch_create(request)
-                
-                if not response.success():
-                    self.logger.error(f"批量创建记录失败: {response.msg}")
-                    return False
-                
-                # 添加延迟避免频率限制
+                    return self.base_client.base.v1.app_table_record.batch_create(request)
+
+                self._call_with_retry(f"批量创建表 {table_id} 记录", _do_create)
                 time.sleep(0.5)
-            
+
             return True
-            
+
         except Exception as e:
             self.logger.error(f"批量创建记录失败: {e}")
             return False
