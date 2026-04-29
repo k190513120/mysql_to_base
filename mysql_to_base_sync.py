@@ -425,35 +425,59 @@ class MySQLToBaseSync:
             self.logger.error(f"获取表 {table_name} 数据失败: {e}")
             return []
     
-    def get_primary_key(self, table_name: str) -> Optional[str]:
-        """获取表的主键字段"""
+    def get_primary_key(self, table_name: str) -> List[str]:
+        """获取表的完整主键字段列表（按列序）。
+
+        返回值是按 ORDINAL_POSITION 排序的列名列表：
+          - 单列主键：['id']
+          - 复合主键：['admin_id', 'role_id']
+          - 无主键：  []
+        """
         try:
             with self.mysql_conn.cursor() as cursor:
-                cursor.execute(f"""
-                    SELECT COLUMN_NAME 
-                    FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE 
-                    WHERE TABLE_SCHEMA = '{self.mysql_config.database}' 
-                    AND TABLE_NAME = '{table_name}' 
-                    AND CONSTRAINT_NAME = 'PRIMARY'
+                cursor.execute(
+                    """
+                    SELECT COLUMN_NAME
+                    FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
+                    WHERE TABLE_SCHEMA = %s
+                      AND TABLE_NAME = %s
+                      AND CONSTRAINT_NAME = 'PRIMARY'
                     ORDER BY ORDINAL_POSITION
-                    LIMIT 1
-                """)
-                result = cursor.fetchone()
-                if result:
-                    return result['COLUMN_NAME']
-                return None
+                    """,
+                    (self.mysql_config.database, table_name),
+                )
+                rows = cursor.fetchall()
+                return [r['COLUMN_NAME'] for r in rows] if rows else []
         except Exception as e:
             self.logger.error(f"获取表 {table_name} 主键失败: {e}")
-            return None
-    
-    def get_existing_records(self, table_id: str, primary_key: Optional[str] = None) -> Dict[str, str]:
-        """获取飞书表格中已存在的记录，基于主键字段建立映射。
+            return []
+
+    @staticmethod
+    def _make_pk_key(fields: Dict[str, Any], pk_cols: List[str]) -> Optional[str]:
+        """从 fields 中按主键列序取值，构建组合去重 key。
+
+        任一主键列缺失或值为 None → 返回 None（调用方应回退到全字段哈希）。
+        多列时用 '\x1f'（unit separator，避免与正常文本碰撞）拼接。
+        """
+        parts = []
+        for c in pk_cols:
+            if c not in fields or fields[c] is None:
+                return None
+            parts.append(str(fields[c]))
+        return '\x1f'.join(parts)
+
+    def get_existing_records(
+        self, table_id: str, primary_key: Optional[List[str]] = None
+    ) -> Dict[str, str]:
+        """获取飞书表格中已存在的记录，基于（可能复合的）主键建立映射。
 
         任何分页失败都会抛异常 —— 调用方必须捕获并中止该表同步，
         绝不能拿残缺/空的去重表去做写入（否则会全表当作新记录批量插入造成重复）。
         """
+        pk_cols = list(primary_key) if primary_key else []
         existing_records: Dict[str, str] = {}
         page_token = None
+        skipped_no_pk = 0
 
         while True:
             def _do_list(_pt=page_token):
@@ -468,15 +492,20 @@ class MySQLToBaseSync:
 
             if hasattr(response.data, 'items') and response.data.items:
                 for record in response.data.items:
-                    if primary_key and primary_key in record.fields:
-                        primary_key_value = str(record.fields[primary_key])
-                        existing_records[primary_key_value] = record.record_id
-                    else:
+                    record_key = None
+                    if pk_cols:
+                        record_key = self._make_pk_key(record.fields, pk_cols)
+                    if record_key is None:
+                        # 没有主键、或飞书侧主键列缺失 → 回退到全字段哈希
+                        if pk_cols:
+                            skipped_no_pk += 1
                         field_values = []
                         for key, value in record.fields.items():
                             field_values.append(f"{key}:{value}")
-                        record_hash = hashlib.md5('|'.join(sorted(field_values)).encode()).hexdigest()
-                        existing_records[record_hash] = record.record_id
+                        record_key = hashlib.md5(
+                            '|'.join(sorted(field_values)).encode()
+                        ).hexdigest()
+                    existing_records[record_key] = record.record_id
 
             if hasattr(response.data, 'has_more') and response.data.has_more:
                 page_token = response.data.page_token
@@ -484,8 +513,11 @@ class MySQLToBaseSync:
             else:
                 break
 
-        if primary_key:
-            self.logger.info(f"获取到 {len(existing_records)} 条已存在记录（基于主键 {primary_key}）")
+        if pk_cols:
+            extra = f"，{skipped_no_pk} 条主键缺失回退哈希" if skipped_no_pk else ''
+            self.logger.info(
+                f"获取到 {len(existing_records)} 条已存在记录（基于主键 {'+'.join(pk_cols)}{extra}）"
+            )
         else:
             self.logger.info(f"获取到 {len(existing_records)} 条已存在记录（基于全字段哈希）")
         return existing_records
@@ -493,15 +525,18 @@ class MySQLToBaseSync:
     def sync_table_data(self, mysql_table: str, base_table_id: str, schema: List[Dict], incremental: bool = True) -> bool:
         """同步表数据（支持增量同步）"""
         try:
-            # 获取主键字段
-            primary_key = self.get_primary_key(mysql_table)
-            self.logger.info(f"表 {mysql_table} 主键字段: {primary_key}")
-            
+            # 获取主键字段（可能是复合主键）
+            pk_cols = self.get_primary_key(mysql_table)
+            if pk_cols:
+                self.logger.info(f"表 {mysql_table} 主键: {'+'.join(pk_cols)}")
+            else:
+                self.logger.info(f"表 {mysql_table} 无主键，将使用全字段哈希去重")
+
             # 获取已存在的记录（用于去重和更新）
             existing_records = {}
             if incremental:
                 try:
-                    existing_records = self.get_existing_records(base_table_id, primary_key)
+                    existing_records = self.get_existing_records(base_table_id, pk_cols)
                 except Exception as e:
                     # 拿不到完整去重表 → 中止该表同步，避免把所有 MySQL 行当新记录批量插入造成重复
                     self.logger.error(
@@ -538,17 +573,15 @@ class MySQLToBaseSync:
                     if not fields:  # 跳过空记录
                         continue
                     
-                    # 生成记录唯一标识
-                    if primary_key and primary_key in fields:
-                        # 使用主键字段值作为唯一标识
-                        record_key = str(fields[primary_key])
-                    else:
-                        # 如果没有主键，回退到使用所有字段值的哈希
+                    # 生成记录唯一标识：组合主键所有列拼出元组 key
+                    record_key = self._make_pk_key(fields, pk_cols) if pk_cols else None
+                    if record_key is None:
+                        # 无主键 / 主键列缺失 → 回退到全字段哈希（与读取侧逻辑保持一致）
                         field_values = []
                         for key, value in fields.items():
                             field_values.append(f"{key}:{value}")
                         record_key = hashlib.md5('|'.join(sorted(field_values)).encode()).hexdigest()
-                    
+
                     # 检查记录是否已存在
                     if incremental and record_key in existing_records:
                         # 记录已存在，准备更新
@@ -556,13 +589,13 @@ class MySQLToBaseSync:
                             'record_id': existing_records[record_key],
                             'fields': fields
                         })
-                        if primary_key:
-                            self.logger.debug(f"准备更新记录，主键 {primary_key}={record_key}")
+                        if pk_cols:
+                            self.logger.debug(f"准备更新记录，主键 {'+'.join(pk_cols)}={record_key}")
                     else:
                         # 新记录，准备创建
                         new_records.append({'fields': fields})
-                        if primary_key:
-                            self.logger.debug(f"准备创建新记录，主键 {primary_key}={record_key}")
+                        if pk_cols:
+                            self.logger.debug(f"准备创建新记录，主键 {'+'.join(pk_cols)}={record_key}")
                 
                 # 批量创建新记录
                 if new_records:
