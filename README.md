@@ -208,6 +208,52 @@ curl -X POST \
    - 检查字段名是否符合飞书规范
    - 确认数据类型映射是否正确
 
+### 排查同步重复写入
+
+如果怀疑某次定时任务把记录写重了，看 GitHub Actions 日志里的同步统计：
+
+```bash
+gh run view <run_id> --repo k190513120/mysql_to_base --log | grep "同步完成 - 总计"
+```
+
+健康表的特征是 `新增: 0` 或一个很小的增量。如果出现 `新增 ≈ 总计`，说明该表在去重映射加载时遇到瞬时错误未被正确处理（已知会触发的飞书错误：`Data not ready, please try again later`、`InternalError` 等）。仓库根目录的 `check_duplicates.py` / `cleanup_duplicates.py` 可用于扫描和清理（按 MySQL 真实主键，含复合主键）。
+
+## 运维脚本
+
+仓库根目录提供两个只在出问题时使用的脚本：
+
+- **`check_duplicates.py`** ：只读扫描每张飞书表按主键的重复情况，输出每表 base 记录数 / 唯一 PK 数 / 多余记录数。
+- **`cleanup_duplicates.py`** ：按 MySQL 真实主键（含复合主键）分组，每组保留 record_id 最早的一条、删除其余。默认 DRY-RUN，加 `--execute` 才真正删除。
+
+调用方式：
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install pymysql python-dotenv
+pip install https://lf3-static.bytednsdoc.com/obj/eden-cn/lmeh7phbozvhoz/base-open-sdk/baseopensdk-0.0.13-py3-none-any.whl
+
+# 配置 .env 后
+python check_duplicates.py            # 扫描
+python cleanup_duplicates.py          # DRY-RUN 计划
+python cleanup_duplicates.py --execute  # 真正清理
+```
+
+## 更新历史
+
+### 2026-04 同步可靠性修复
+
+历史曾出现"偶发整表数据重复写入"（约 5 万条），根因为两个叠加：
+
+1. **去重映射在拉取失败时返回残缺数据**（`mysql_to_base_sync.py:get_existing_records`）：分页拉飞书已存在记录时，遇到瞬时错误（`Data not ready, please try again later` 等）会 `break` 后返回部分/空映射，导致下游把整张表当成新记录批量插入。
+2. **复合主键中间表只取了首列做去重**（`mysql_to_base_sync.py:get_primary_key`）：`(admin_id, role_id)` 之类组合键的中间表（`la_admin_dept` / `la_admin_jobs` / `la_admin_role` / `la_system_role_menu`）会让多条不同 role 的行共用同一个 record_key，反复 update 到同一个 record_id 上，飞书侧关联数据持续丢失。
+
+修复 commit：
+
+- `f2209aa` —— 引入 `_call_with_retry` 指数退避；`get_existing_records` 失败抛异常，`sync_table_data` 捕获后中止该表本次同步；`_batch_create` / `_batch_update` 也接入重试。
+- `483805d` —— `get_primary_key` 返回完整主键列表 `List[str]`；新增 `_make_pk_key` 用 `\x1f` 拼组合 key；读写两侧统一使用复合 key 比对。
+
+修任何同步逻辑前请先看这两个 commit 的差异，避免重新引入这两类问题。
+
 ## 贡献
 
 欢迎提交Issue和Pull Request来改进这个项目！
