@@ -43,6 +43,11 @@ on:
           - domestic
           - overseas
 
+# 同一时间只跑一个同步，后来的排队，避免两次同时写同一张表产生重复记录
+concurrency:
+  group: mysql-to-base-sync
+  cancel-in-progress: false
+
 jobs:
   sync:
     runs-on: ubuntu-latest
